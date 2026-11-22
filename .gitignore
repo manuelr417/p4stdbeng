@@ -1,0 +1,8 @@
+build*/
+cmake-build-*/
+.idea/
+data/*.tbl
+data/*.idx
+tablecatalog/*.json
+tmp/
+.DS_Store
