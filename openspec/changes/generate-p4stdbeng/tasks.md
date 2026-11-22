@@ -12,5 +12,5 @@
 
 ## 3. Student handout
 
-- [x] 3.1 Rewrite `../p4stdbeng/README.md` as the student handout per design D5: the engine description, the "everything works except the two join algorithms" paragraph naming the stub files and the untouched headers, the implement-until-the-suite-passes contract with the failing suites listed, the suggested order (index nested loops first, then the hash join's phases), the build/suite/CTest invocation, and the due-date placeholder
+- [x] 3.1 Rewrite `../p4stdbeng/README.md` as the student handout per design D5: the engine description, the "everything works except the two join algorithms" paragraph naming the stub files and the untouched headers, the implement-until-the-suite-passes contract with the failing suites listed, the suggested order (index nested loops first, then the hash join's phases), the build/suite/CTest invocation, and the due date (December 3, 2026)
 - [x] 3.2 `git init` in `../p4stdbeng`, add an initial commit of the generated tree, and confirm p4dbeng's own check suite is still green (the generation must not have touched the solution)
