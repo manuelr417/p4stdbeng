@@ -400,7 +400,7 @@ which is a different algorithm. The statement announces
 `(via nested loops join)` otherwise, and suppression (the oracle's
 `allow_index` gate) flips the announcement without moving a row.
 
-Wiring the rule exposed a latent defect in the freshly-archived fold:
+Wiring the rule exposed a latent defect in the join fold:
 its inner side was `nodes.back()`, correct only for two tables — with
 three, the accumulating join became its own inner child (a double-open
 assert). The fold now tracks each entry's top node, and three-way
@@ -518,7 +518,7 @@ and the pair would land. Any hit refuses the whole statement with the
 duplicate named, nothing stored. UPDATE computes every new row in a
 planning pass — which also closes a pre-existing hole where a mid-loop
 width refusal could leave earlier rows applied — and checks the same two
-sources there, with one exception the spec pins: a row assigning its own
+sources there, with one exception the check suite pins: a row assigning its own
 current value skips the probe, so `SET pid = pid` passes; and in the
 changed branch an index hit cannot be the row's own entry (the row's own
 rid sits under its old key), so any hit is another row and a refusal.
