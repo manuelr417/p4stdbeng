@@ -20,7 +20,7 @@ types, the SQL layer, the executors, the other Volcano operators
 `Partitions`, `RowIdScan`), the hash join's provided key machinery, the
 bulk loader, and all the tests — is provided and must not change.
 
-**Due date: DUE DATE: <set by instructor>.**
+**Due date: December 3, 2026.**
 
 ## What it does
 

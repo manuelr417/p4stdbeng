@@ -45,4 +45,4 @@ Generate into a fresh `../p4stdbeng` (fail if it exists), verify the designed fa
 
 ## Open Questions
 
-- The due date on the handout README is a placeholder (`DUE DATE: <set by instructor>`), to be filled by the professor — same as p3std's README carrying its date.
+- None — the due date on the handout README is set (December 3, 2026).
