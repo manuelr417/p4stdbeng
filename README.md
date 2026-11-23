@@ -46,6 +46,16 @@ bulk loader, and all the tests — is provided and must not change.
   partition pair). The join predicate always decides over the combined
   rows — the index or the hash only narrows — so the answer never
   depends on the plan.
+- **Output**: a SELECT's rows render in one of two shapes, set by the
+  `labeled_rows` switch in `conf.json`. `true` (the default) prints the
+  labeled teaching form — `cid=682, car_brand=Toyota, ...` — so every
+  value self-identifies; `false` prints one header line of the column
+  names, then the rows as values only. Only the row lines change: the
+  access-path announcement, the `N row(s)` count, and the timing line
+  are identical under both. Any SELECT may also pipe its rows straight
+  to a CSV file — `SELECT ... | out.csv;` — written in the engine's own
+  CSV dialect (header line, then comma-separated values, the same
+  dialect `append` reads), with the report staying on screen.
 - **Types**: Integer, Double, and fixed-width String columns. The binder
   is type-strict, and an integer operation whose result is not
   representable in 32 bits is a named run-time error.
@@ -116,7 +126,9 @@ Three binaries share the library code:
   with the differential oracle.
 - `p4stdbeng_cli` — the SQL session (`p4stdbeng_cli.cpp`): a REPL where
   statements accumulate until a `;`, plus the escape hatches (`scan`,
-  `read`, `seek`, `bulk`, `append`, `checkindex`, `quit`).
+  `read`, `seek`, `bulk`, `append`, `checkindex`, `quit`). A SELECT may
+  pipe its rows to a CSV file — `SELECT ... | out.csv;` — bare names
+  resolving through `data/`.
 - `p4stdbeng_bench` — the index-vs-heap benchmark over generated rows.
 
 ## Building

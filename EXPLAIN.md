@@ -702,7 +702,7 @@ the join suite cycles through. Annotation can drift the day someone edits
 a decision site and forgets its line; the differential makes that
 day fail loudly.
 
-## Task 21 — The timing switch (`config/Config`, `p4dbeng_cli.cpp`)
+## Task 21 — The timing switch (`config/Config`, `p4stdbeng_cli.cpp`)
 
 The engine makes real choices — index versus heap, hash versus loops,
 pushdown or not — and the only way to feel their cost was an external
@@ -748,9 +748,96 @@ refusal case, `bulk` printing no time line, the line's exact shape, and
 `timing: false` keeping the output free of time lines. The config suite
 gains the fifth key's parse, missing, duplicate, and non-boolean cases.
 
+## Task 22 — The row-format switch (`config/Config`, `p4stdbeng_cli.cpp`)
+
+The labeled report — every value prefixed by its column name — is the
+teaching form: each number self-identifies, nothing can be misread. It is
+also the wrong shape for anything downstream: a spreadsheet, a script, a
+student's notebook wants one header line and bare values. The session's
+answer to every behavior question so far has been the same — a required
+switch in `conf.json`, refused when absent — so the output shape joined
+it as `labeled_rows`, the sixth required key.
+
+Three decisions shape it:
+
+- **`true` is today, byte for byte.** The polarity follows the naming:
+  `labeled_rows: true` names what the format already was (every row
+  labeled). The rendering branch sits only around the row lines of
+  `execute_statement` — the `(via ...)` announcement, the `N row(s)`
+  count, error messages, and the timing wrapper are outside it — so the
+  true path is not a rewrite of the old output but the old output,
+  unpinned from a single shape.
+- **The compact form is display, not file dialect.** Header line and
+  value lines join with `", "` — the same separator the labeled rows
+  always used, so on screen `682, Toyota, Hilux` reads at the same
+  distance as `cid=682, car_brand=Toyota`. This is deliberately not the
+  CSV file dialect (bare `,`, no space): the reader splits without
+  trimming, so a space-prefixed integer would refuse to parse on
+  re-import. The next task's file writer owns the strict form; stdout
+  is for eyes.
+- **The escape hatches keep their records.** `scan` and `read` print
+  `(page,slot) col=value, ...` through their own printer — the ex
+  row-id semantics are raw inspection, not SELECT reports, and a switch
+  named for SELECT rendering has no business there.
+
+The CLI suite gains the rendering contract through the real binary: the
+true path byte-identical to the historical form, the false path's exact
+header-plus-values shape, the report lines unmoved, an empty result
+still naming its columns, and escape-hatch records unchanged under
+`false`. The config suite gains the sixth key's missing, non-boolean,
+and both-values cases.
+
+## Task 23 — The export pipe (`p4stdbeng_cli.cpp`)
+
+A query's result is only as useful as where it can go. Copy-pasting the
+terminal loses the shape; the engine already owns a CSV dialect —
+`append` reads it — so the missing half was writing it. The form chosen
+is the smallest bridge off the prompt: `SELECT ... | out.csv;` — the
+pipe and target ride inside the statement's own semicolon-terminated
+text, stripped before the parser sees anything.
+
+Four decisions shape it:
+
+- **The split is the last unquoted `|`.** A `|` inside single quotes is
+  data (`WHERE name = 'a|b'` parses whole); the `''` toggle self-
+  corrects for doubled quotes inside literals. A second unquoted pipe
+  refuses — one export target per statement, no guessing which was
+  meant. The split runs inside the timed dispatch, so its refusals are
+  timed like any statement's, and it works across continuation lines
+  for free (the accumulator hands over the complete chunk before the
+  split runs).
+- **Parse, execute, then open.** The file opens only after the
+  statement executed successfully — a failed query leaves no file, not
+  even an empty one. An unopenable target then reports
+  `cannot open '<path>'` through the session's ordinary error boundary,
+  and the session continues. The rows are already materialized in the
+  `ResultSet`, so there is no streaming question.
+- **The file is the engine's dialect, header included.** One header
+  line of the projected names, then value-only lines, every field
+  joined by a bare `,` — mandatory, because the reader neither trims
+  nor quotes, so a space-prefixed integer would refuse to re-parse.
+  Cells render through the same `print_value` the screen uses. The
+  format ignores `labeled_rows`: the switch styles the screen; the file
+  is data. A table-wide export re-imports through `append` once its
+  header line is dropped (the reader's caller skips it as line 1 —
+  counted, never fatal).
+- **The screen keeps the report, loses the rows.** `(via ...)` and
+  `N row(s)` still print, the time line landing last when timing is on —
+  the write is inside the dispatch clock, so the statement's measured
+  time honestly includes its export. A piped non-SELECT refuses with
+  `export applies to a SELECT` before any file work.
+
+The CLI suite drives the real binary and reads the files back: exact
+bytes of an export, the header-only empty result, the `data/` bare-name
+resolution, a slashed path honored as given, stdout stripped to the
+report lines, every refusal (non-SELECT, empty target, double pipe,
+unopenable path) leaving no file behind, a quoted pipe not splitting,
+and the round-trip — the written file parsed back through the engine's
+own CSV reader against the source schema, zero skips.
+
 ## Where the project stands
 
-All twenty-one tasks are implemented; the check suite — now with the
+All twenty-three tasks are implemented; the check suite — now with the
 operators suite, the join suite (behavioral pins plus the
 two-grammar-forms-versus-reference oracle, pushdown bypass included,
 every round run through three access-path settings — everything allowed,
