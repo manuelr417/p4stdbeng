@@ -98,7 +98,7 @@ modify the header files or any provided file.
 | `file/` | Block-level I/O: 4096-byte block read/write on plain files |
 | `bufpool/` | Buffer pool and buffer manager: pin/unpin, eviction, write-back; the join pool for hash-join scratch |
 | `policy/` | Replacement policies (LRU) injected into the buffer manager |
-| `config/` | The strict `conf.json` loader: both pool sizes, the policy, the `hash_join` and `timing` switches |
+| `config/` | The strict `conf.json` loader: both pool sizes, the policy, and the `hash_join`, `timing`, and `labeled_rows` switches |
 | `heapfile/` | The TUP2 heap file: slotted pages, two free-space lists, self-check |
 | `tuple/` | In-memory row values (`Tuple`, `Column`) |
 | `schema/` | Table schema, JSON catalog loader + atomic writer, the tuple serializer, CSV bulk load, a row generator |
@@ -139,12 +139,12 @@ ctest --test-dir build --output-on-failure
 ```
 
 The suite is the specification: every check names the behavior it demands.
-**Before you start, 1,098 checks pass and 42 fail — every failure is a
+**Before you start, 1,119 checks pass and 42 fail — every failure is a
 join check.** The failing surface is your work list: the operators suite's
 `IndexNestedLoopsJoin` and `HashJoin` sections, the join suite in full
 (both grammar forms, three-way chains, pushdown bypassed, randomized
 oracles against an independently computed reference), and the exec suite's
 join paths. The storage, SQL, index, B+tree, loader, config, and CLI
 suites pass before you start — they are the provided infrastructure's own
-regression net, and they must stay green. When all 1,140 checks pass, you
+regression net, and they must stay green. When all 1,161 checks pass, you
 are done.

@@ -18,13 +18,16 @@ struct Config {
     std::size_t join_pool_size = 0; // join pool frames, validated to be >= 1
     bool hash_join = true;          // whether joins may run as hash joins
     bool timing = false;            // whether the CLI reports per-statement time
+    bool labeled_rows = true;       // whether SELECT rows print labeled (col=value)
+                                    // or as a header line plus bare values
 };
 
-// Reads a flat JSON object with five entries from `path`: "policy" (a
+// Reads a flat JSON object with six entries from `path`: "policy" (a
 // quoted string), "pool_size" and "join_pool_size" (integers >= 1), and
-// "hash_join" and "timing" (the bare literals true or false). All five
-// entries are required; duplicate keys, trailing commas, trailing garbage,
-// non-integer pool sizes, and non-boolean switch values are rejected.
+// "hash_join", "timing", and "labeled_rows" (the bare literals true or
+// false). All six entries are required; duplicate keys, trailing commas,
+// trailing garbage, non-integer pool sizes, and non-boolean switch values
+// are rejected.
 // Unknown keys are skipped with a warning on the diagnostics stream.
 // Follows the house error convention: `error` is cleared on entry and
 // filled only on failure.

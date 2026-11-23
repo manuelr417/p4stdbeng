@@ -72,11 +72,11 @@ A file argument given to the escape-hatch commands (`scan`, `read`, `seek`, `bul
 - **THEN** the scan reads exactly `/tmp/demo.tbl`, not something under `data/`
 
 ### Requirement: Session configuration from conf.json
-The session SHALL read `conf.json` from the working directory at startup, with five required keys: `policy`, `pool_size`, `join_pool_size`, the `hash_join` switch, and the `timing` switch. A missing or invalid file SHALL end the session before any statement runs — never a silent default.
+The session SHALL read `conf.json` from the working directory at startup, with six required keys: `policy`, `pool_size`, `join_pool_size`, the `hash_join` switch, the `timing` switch, and the `labeled_rows` switch. A missing or invalid file SHALL end the session before any statement runs — never a silent default.
 
 #### Scenario: A valid config starts the session
-- **WHEN** `conf.json` names a registered policy, two positive pool sizes, and boolean hash-join and timing switches
-- **THEN** the session starts with the pools sized and policed as declared, the hash join available per the hash-join switch, and per-statement timing enabled per the timing switch
+- **WHEN** `conf.json` names a registered policy, two positive pool sizes, and boolean hash-join, timing, and labeled-rows switches
+- **THEN** the session starts with the pools sized and policed as declared, the hash join available per the hash-join switch, per-statement timing enabled per the timing switch, and SELECT rows rendered per the labeled-rows switch
 
 #### Scenario: A broken config is fatal
 - **WHEN** `conf.json` is missing, unparseable, or missing a key
@@ -89,6 +89,29 @@ The session SHALL read `conf.json` from the working directory at startup, with f
 #### Scenario: Hash join off leaves the plain paths
 - **WHEN** `hash_join` is `false` and a join query executes whose predicate equates the tables' columns
 - **THEN** the answer is produced by the index join when an index serves the shape, by the nested loops join otherwise — never announced as a hash join
+
+### Requirement: SELECT row rendering under the labeled_rows switch
+When `labeled_rows` is `true`, each SELECT result row SHALL print in the labeled form — every value prefixed by its column name and `=`, pairs comma-separated — exactly as the session has always rendered them. When `labeled_rows` is `false`, a SELECT's report SHALL print one header line of the projected column names separated by `", "`, then one line per row of the values only, separated by `", "` in the same column order. The access-path announcement line, the trailing `N row(s)` count, the timing line, non-SELECT messages, EXPLAIN output, and the escape-hatch commands' `(page,slot) col=value` records SHALL be identical under both settings. The switch is startup configuration: no statement or session command SHALL change it.
+
+#### Scenario: Labeled rows keep the current format
+- **WHEN** `labeled_rows` is `true` and a SELECT returns rows
+- **THEN** each row prints as `col=value, col=value, ...` — the format before this change, byte for byte
+
+#### Scenario: Unlabeled rows print a header once and values only
+- **WHEN** `labeled_rows` is `false` and a SELECT returns rows
+- **THEN** the first line of the result is the projected column names joined by `", "`, and each following line is the row's values joined by `", "` with no column names
+
+#### Scenario: The report lines do not move
+- **WHEN** `labeled_rows` is `false` and a SELECT announces an access path and returns N rows
+- **THEN** the output still opens with `(via <access path>)`, still ends with `N row(s)`, and carries the `time:` line last when timing is on — only the row lines' shape changed
+
+#### Scenario: An empty result still names its columns
+- **WHEN** `labeled_rows` is `false` and a SELECT matches no rows
+- **THEN** the header line still prints, followed by `0 row(s)`
+
+#### Scenario: Escape hatches keep their record form
+- **WHEN** `labeled_rows` is `false` and a `scan` or `read` escape hatch runs
+- **THEN** each record still prints as `(page,slot)  col=value, col=value, ...` — the ex row-id semantics are not SELECT reports
 
 ### Requirement: Per-statement timing under the timing switch
 When `timing` is `true`, the session SHALL measure each SQL statement's elapsed time — from the moment the complete statement dispatches to the executor until the last line of its report (result rows, a count, or a named error) has printed — and SHALL print it as the statement's final line in the form `time: <seconds> seconds`, seconds with six decimal places, on the standard output. Each semicolon-terminated statement SHALL be timed individually; a statement accumulated over several input lines SHALL be timed from its dispatch (the user's time between lines is not engine time), and a refused statement SHALL be timed as any other. When `timing` is `false`, the session SHALL take no time and print no time line. The escape-hatch commands (`scan`, `read`, `seek`, `bulk`, `append`, `checkindex`) SHALL NOT be timed.
@@ -119,3 +142,34 @@ The session SHALL keep a `tmp/` directory beside `data/` for join scratch files:
 #### Scenario: Stale scratch does not survive a restart
 - **WHEN** a previous session left files in `tmp/` (a crash mid-query) and a new session starts
 - **THEN** the new session wipes them before the first statement and runs normally
+
+### Requirement: Export a SELECT result to a CSV file
+A SELECT dispatched with a pipe suffix — `<query> | <target>` inside the statement's `;`-terminated text — SHALL write its result set to the target file in the engine's CSV dialect and SHALL NOT print the result rows to the standard output. The dialect SHALL be one header line of the projected column names followed by one line per row of the values only, every field separated by a bare `,` with no spaces, so that the file parses back through the engine's own CSV reader. The split between query and target SHALL be the last `|` outside single-quoted strings; the text before SHALL parse as exactly one statement and the trimmed text after is the target, which SHALL resolve like `append`'s CSV paths: a bare name through `data/`, a path with a slash exactly as given. A failed or refused query SHALL create no file. The access-path announcement and the `N row(s)` count SHALL still print, and the statement SHALL be timed as any other when the timing switch is on — the file write inside the dispatch clock. The file format SHALL NOT depend on the `labeled_rows` switch.
+
+#### Scenario: A piped SELECT writes the file and keeps the report
+- **WHEN** a SELECT with a pipe target matches rows and the target opens
+- **THEN** the file holds the projected column names on the first line and the values only on each following line, all comma-separated with no spaces; the standard output shows `(via <access path>)` and `N row(s)` but no row lines, and the `time:` line when timing is on
+
+#### Scenario: The file round-trips through the engine's CSV reader
+- **WHEN** an exported file's lines are parsed by the engine's CSV row reader against the source table's schema
+- **THEN** every line parses to a tuple with zero skips — bare commas, no quoting, header tolerated by the reader's caller
+
+#### Scenario: A bare target resolves through data/
+- **WHEN** the pipe target is a bare file name with no slash
+- **THEN** the file is written to `data/<name>`, and a target containing a slash is used exactly as given — the same rule `append` applies
+
+#### Scenario: A refused or failed query leaves no file
+- **WHEN** the piped statement is a non-SELECT, names no target, carries a second pipe, or fails with a named error
+- **THEN** the refusal or error prints by name and no file is created or truncated
+
+#### Scenario: An unopenable target is a named error
+- **WHEN** the query succeeds but the target file cannot be opened for writing
+- **THEN** the session prints `cannot open '<path>'` and continues — the next statement runs
+
+#### Scenario: An empty result writes the header only
+- **WHEN** a piped SELECT matches no rows
+- **THEN** the file contains only the header line, and the standard output reports `0 row(s)`
+
+#### Scenario: A pipe inside a string literal is not a split
+- **WHEN** a SELECT's predicate contains a `|` inside single quotes
+- **THEN** the query parses whole and no export happens — only an unquoted pipe splits the statement

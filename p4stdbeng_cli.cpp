@@ -2,6 +2,9 @@
 // plus ISAM indexes. SQL statements accumulate across lines until a
 // semicolon; the ex row-id commands (scan, read, seek, bulk) run bare
 // as escape hatches, and checkindex verifies a data file's indexes.
+// A SELECT may pipe its rows to a CSV file — `SELECT ... | out.csv;` —
+// the engine's own dialect, header included, written instead of the
+// row lines while the report stays on the screen.
 // Session configuration comes from conf.json in the working directory:
 // the main BufferManager (pool_size frames) and the join BufferManager
 // (join_pool_size frames — the hash join's scratch pool) live for the
@@ -116,6 +119,39 @@ std::string print_value(const exec::Value& value) {
 
 [[noreturn]] void fail(const std::string& message) {
     throw common::Error(message);
+}
+
+std::string trim(const std::string& text) {
+    const std::size_t begin = text.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const std::size_t end = text.find_last_not_of(" \t\r\n");
+    return text.substr(begin, end - begin + 1);
+}
+
+// The export pipe: the last `|` outside single quotes splits a
+// statement's text from its CSV target (`SELECT ... | out.csv;`). Returns
+// npos when the text carries no unquoted pipe; a second unquoted pipe
+// refuses — one export target per statement, no guessing. A `|`
+// inside a string literal is data, not a split (the '' toggle self-
+// corrects for doubled quotes inside literals).
+std::size_t find_export_pipe(const std::string& text) {
+    std::size_t last = std::string::npos;
+    std::size_t count = 0;
+    bool in_string = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\'') {
+            in_string = !in_string;
+        } else if (text[i] == '|' && !in_string) {
+            last = i;
+            ++count;
+        }
+    }
+    if (count > 1) {
+        fail("one export per statement: a second '|' is not supported");
+    }
+    return last;
 }
 
 // The boundary: a failure inside `body` is printed, and the session (or
@@ -264,25 +300,98 @@ void print_help() {
               << "Tables: the names in tablecatalog/ (e.g. person, car)\n";
 }
 
+// The export writer: the engine's CSV dialect — one header line of the
+// projected names, then the values only, every field joined by a bare
+// ',' (the reader splits without trimming, so no spaces), no quoting (a
+// comma cannot appear inside a value by the engine's own rules). The
+// format is fixed regardless of the labeled_rows switch: the switch
+// styles the screen; the file is data. Called only after the statement
+// executed successfully, so a failed query leaves no file.
+void write_result_csv(const exec::ResultSet& rows, const std::string& path) {
+    std::ofstream out(path);
+    if (!out) {
+        fail("cannot open '" + path + "'");
+    }
+    for (std::size_t i = 0; i < rows.columns.size(); ++i) {
+        if (i != 0) {
+            out << ",";
+        }
+        out << rows.columns[i];
+    }
+    out << "\n";
+    for (const std::vector<exec::Value>& row : rows.rows) {
+        for (std::size_t i = 0; i < row.size(); ++i) {
+            if (i != 0) {
+                out << ",";
+            }
+            out << print_value(row[i]);
+        }
+        out << "\n";
+    }
+}
+
 // Executes one SQL statement's text and prints the result; the first
-// error stops the line's statement batch.
-void execute_statement(exec::Executor& executor, const std::string& text) {
-    for (const std::unique_ptr<sql::Statement>& statement : sql::parse(text).statements) {
+// error stops the line's statement batch. `labeled_rows` picks the SELECT
+// row rendering: true — the labeled teaching form (`col=value, ...` per
+// row); false — one header line of the projected column names, then the
+// values only. The access-path announcement, the count, and every
+// non-SELECT report are identical under both. `export_csv` (empty =
+// none) redirects a SELECT's rows to that CSV file instead of the
+// screen, keeping the report lines; a piped non-SELECT refuses.
+void execute_statement(exec::Executor& executor, const std::string& text,
+                       bool labeled_rows, const std::string& export_csv) {
+    const std::vector<std::unique_ptr<sql::Statement>> parsed =
+        sql::parse(text).statements;
+    if (!export_csv.empty() && parsed.size() != 1) {
+        fail("one statement per export: the text before '|' must be a "
+             "single SQL statement");
+    }
+    for (const std::unique_ptr<sql::Statement>& statement : parsed) {
         const exec::StatementResult result = executor.execute(*statement);
         if (!result.rows.access_path.empty()) {
             std::cout << "(via " << result.rows.access_path << ")\n";
-            for (const std::vector<exec::Value>& row : result.rows.rows) {
-                for (std::size_t i = 0; i < row.size(); ++i) {
+            if (!export_csv.empty()) {
+                // The rows go to the file; the screen keeps the report.
+                write_result_csv(result.rows, export_csv);
+            } else if (labeled_rows) {
+                for (const std::vector<exec::Value>& row : result.rows.rows) {
+                    for (std::size_t i = 0; i < row.size(); ++i) {
+                        if (i != 0) {
+                            std::cout << ", ";
+                        }
+                        std::cout << result.rows.columns[i] << "=" << print_value(row[i]);
+                    }
+                    std::cout << "\n";
+                }
+            } else {
+                // The compact form: the projected names once as a header
+                // (an empty result still names its columns), then the
+                // values only, same separator.
+                for (std::size_t i = 0; i < result.rows.columns.size(); ++i) {
                     if (i != 0) {
                         std::cout << ", ";
                     }
-                    std::cout << result.rows.columns[i] << "=" << print_value(row[i]);
+                    std::cout << result.rows.columns[i];
                 }
                 std::cout << "\n";
+                for (const std::vector<exec::Value>& row : result.rows.rows) {
+                    for (std::size_t i = 0; i < row.size(); ++i) {
+                        if (i != 0) {
+                            std::cout << ", ";
+                        }
+                        std::cout << print_value(row[i]);
+                    }
+                    std::cout << "\n";
+                }
             }
             std::cout << result.rows.rows.size() << " row(s)\n";
-        } else if (!result.message.empty()) {
-            std::cout << result.message << "\n";
+        } else {
+            if (!result.message.empty()) {
+                std::cout << result.message << "\n";
+            }
+            if (!export_csv.empty()) {
+                fail("export applies to a SELECT");
+            }
         }
     }
 }
@@ -406,7 +515,30 @@ int main() {
             // The user's time between continuation lines never enters the
             // clock, and the escape-hatch dispatch above stays untimed.
             const auto dispatch_start = std::chrono::steady_clock::now();
-            report_errors([&] { execute_statement(executor, statement_text); });
+            report_errors([&] {
+                // The export pipe: a SELECT may name a CSV target — the
+                // last unquoted '|' splits query from target. The split
+                // sits inside the timed dispatch, so its refusals are
+                // timed like any other statement's.
+                std::string query = statement_text;
+                std::string export_target;
+                const std::size_t pipe = find_export_pipe(statement_text);
+                if (pipe != std::string::npos) {
+                    query = statement_text.substr(0, pipe);
+                    export_target = trim(statement_text.substr(pipe + 1));
+                    if (export_target.empty()) {
+                        fail("export target missing after '|'");
+                    }
+                    if (trim(query).empty()) {
+                        fail("no statement before '|'");
+                    }
+                    // The same path rule as `append`: a bare name lives
+                    // in data/, a slashed path is used as given.
+                    export_target = resolve_csv_path(export_target);
+                }
+                execute_statement(executor, query, config.labeled_rows,
+                                  export_target);
+            });
             if (config.timing) {
                 const std::chrono::duration<double> elapsed =
                     std::chrono::steady_clock::now() - dispatch_start;

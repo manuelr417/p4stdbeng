@@ -172,6 +172,7 @@ bool parse_config_text(const std::string& text, Config& out,
     bool have_join_pool_size = false;
     bool have_hash_join = false;
     bool have_timing = false;
+    bool have_labeled_rows = false;
     for (;;) {
         std::string key;
         if (!parse_string(s, key, error)) {
@@ -227,6 +228,15 @@ bool parse_config_text(const std::string& text, Config& out,
                 return false;
             }
             have_timing = true;
+        } else if (key == "labeled_rows") {
+            if (have_labeled_rows) {
+                error = "duplicate key 'labeled_rows'";
+                return false;
+            }
+            if (!parse_bool(s, key, out.labeled_rows, error)) {
+                return false;
+            }
+            have_labeled_rows = true;
         } else {
             // Unknown key: consume its value (boolean, string, or number)
             // and move on with a warning.
@@ -285,6 +295,10 @@ bool parse_config_text(const std::string& text, Config& out,
     }
     if (!have_timing) {
         error = "missing 'timing' entry";
+        return false;
+    }
+    if (!have_labeled_rows) {
+        error = "missing 'labeled_rows' entry";
         return false;
     }
     if (out.pool_size == 0) {

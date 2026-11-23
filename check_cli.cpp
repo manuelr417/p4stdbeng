@@ -1,18 +1,24 @@
 // p4stdbeng — the CLI suite: the timing switch's end-to-end contract, driven
 // through the real session binary. The config reader's refusals live in
-// the config suite; this suite pins what the CLI does with the switch —
+// the config suite; this suite pins what the CLI does with the switches —
 // one `time:` line per SQL statement (statements sharing one input line
 // timed individually), refused statements timed after their named error,
 // escape-hatch commands untimed, the line's shape, and timing false
-// keeping the output free of time lines.
+// keeping the output free of time lines — and the labeled_rows switch's
+// rendering contract: labeled rows when true, a header line plus
+// value-only rows when false, with the report lines and the escape
+// hatches unchanged.
 
 #include "check_support.h"
+#include "schema/TableCsv.h"
+#include "schema/TableSchemaJson.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -39,10 +45,11 @@ bool contains(const std::string& text, const std::string& part) {
 }
 
 // Writes `text` to conf.json in the current (sandbox) directory.
-void write_conf(bool timing) {
+void write_conf(bool timing, bool labeled_rows = true) {
     std::ofstream conf("conf.json");
     conf << "{ \"policy\": \"lru\", \"pool_size\": 10, \"join_pool_size\": 8, "
          << "\"hash_join\": true, \"timing\": " << (timing ? "true" : "false")
+         << ", \"labeled_rows\": " << (labeled_rows ? "true" : "false")
          << " }\n";
 }
 
@@ -175,6 +182,149 @@ int run_cli_checks() {
         const std::string output = run_cli(setup);
         check(count_time_lines(output) == 0 && contains(output, "name=bob"),
               "timing false: no time lines, results unchanged");
+    }
+
+    // --- labeled_rows false: the compact rendering ---
+    // (a fresh table per session: the sandbox's catalog persists across
+    // run_cli calls)
+    {
+        write_conf(false, false);
+        const std::string compact = run_cli(
+            "CREATE TABLE fmt (pid INTEGER, name VARCHAR(10));\n"
+            "INSERT INTO fmt VALUES (1, 'ann'), (2, 'bob');\n"
+            "SELECT pid, name FROM fmt;\nquit\n");
+        check(contains(compact, "pid, name\n1, ann\n2, bob\n2 row(s)"),
+              "labeled_rows false: one header line, then value-only rows");
+        check(!contains(compact, "pid=1") && !contains(compact, "name=ann"),
+              "labeled_rows false: no per-row labels anywhere");
+        check(contains(compact, "(via heap scan)"),
+              "labeled_rows false: the access-path announcement stays");
+
+        const std::string empty = run_cli(
+            "CREATE TABLE fmt2 (pid INTEGER, name VARCHAR(10));\n"
+            "INSERT INTO fmt2 VALUES (1, 'ann');\n"
+            "SELECT pid, name FROM fmt2 WHERE pid = 99;\nquit\n");
+        check(contains(empty, "pid, name\n0 row(s)"),
+              "labeled_rows false: an empty result still names its columns");
+
+        const std::string hatch = run_cli(
+            "CREATE TABLE fmt3 (pid INTEGER, name VARCHAR(10));\n"
+            "INSERT INTO fmt3 VALUES (1, 'ann');\n"
+            "scan fmt3 data/fmt3.tbl\nquit\n");
+        check(contains(hatch, "pid=1, name=ann") &&
+                  contains(hatch, "scanned 1 record(s)"),
+              "labeled_rows false: escape-hatch records keep their labels");
+
+        write_conf(true, false);
+        const std::string timed = run_cli(
+            "CREATE TABLE fmt4 (pid INTEGER, name VARCHAR(10));\n"
+            "INSERT INTO fmt4 VALUES (1, 'ann');\n"
+            "SELECT pid, name FROM fmt4;\nquit\n");
+        check(count_time_lines(timed) == 3 &&
+                  contains(timed, "pid, name\n1, ann\n1 row(s)"),
+              "labeled_rows false: timing wraps the compact report the same");
+    }
+
+    // --- the export pipe: SELECT ... | file ---
+    // (a fresh table per session: the sandbox's catalog persists across
+    // run_cli calls)
+    {
+        write_conf(true, true);
+        const std::string exported = run_cli(
+            "CREATE TABLE ex1 (pid INTEGER, name VARCHAR(10), score DOUBLE);\n"
+            "INSERT INTO ex1 VALUES (1, 'ann', 9.5), (2, 'bob', 7.25);\n"
+            "SELECT pid, name, score FROM ex1 | out1.csv;\n"
+            "SELECT pid, name FROM ex1 WHERE pid = 99 | empty.csv;\nquit\n");
+        check(contains(exported, "(via heap scan)\n2 row(s)\ntime:"),
+              "export: the screen keeps the announcement, count, and time");
+        check(!contains(exported, "pid=1") && !contains(exported, "9.5"),
+              "export: the row lines do not print");
+        check(contains(exported, "0 row(s)"),
+              "export: an empty result reports its zero count");
+
+        const std::string csv = [] {
+            std::ifstream in("data/out1.csv");
+            std::ostringstream text;
+            text << in.rdbuf();
+            return text.str();
+        }();
+        check(csv == "pid,name,score\n1,ann,9.5\n2,bob,7.25\n",
+              "export: the file is the engine's CSV dialect, header included");
+        const std::string empty_csv = [] {
+            std::ifstream in("data/empty.csv");
+            std::ostringstream text;
+            text << in.rdbuf();
+            return text.str();
+        }();
+        check(empty_csv == "pid,name\n",
+              "export: an empty result writes the header only");
+
+        // A slashed target is honored as given (not under data/).
+        run_cli("SELECT pid FROM ex1 | ./direct.csv;\nquit\n");
+        {
+            std::ifstream in("direct.csv");
+            check(in.good(), "export: a slashed path is used exactly as given");
+        }
+
+        // The refusal surface: nothing below may create a file.
+        const std::string refused = run_cli(
+            "CREATE TABLE ex2 (pid INTEGER);\n"
+            "INSERT INTO ex2 VALUES (1);\n"
+            "INSERT INTO ex2 VALUES (2) | nope1.csv;\n"
+            "CREATE TABLE ex3 (pid INTEGER) | nope2.csv;\n"
+            "SELECT nosuch FROM ex2 | nope3.csv;\n"
+            "SELECT pid FROM ex2 | ;\n"
+            "SELECT pid FROM ex2 | a.csv | b.csv;\n"
+            "SELECT pid FROM ex2 | nosuchdir/x.csv;\n"
+            "SELECT pid FROM ex2;\nquit\n");
+        check(contains(refused, "export applies to a SELECT") &&
+                  contains(refused, "export target missing after '|'") &&
+                  contains(refused, "one export per statement") &&
+                  contains(refused, "cannot open 'nosuchdir/x.csv'"),
+              "export: every refusal names itself");
+        check(contains(refused, "2 row(s)"),
+              "export: the session continues after every refusal");
+        bool nope_exists = false;
+        for (const char* name :
+             {"nope1.csv", "nope2.csv", "nope3.csv", "a.csv", "b.csv",
+              "data/nope1.csv", "data/nope2.csv", "data/nope3.csv",
+              "data/a.csv", "data/b.csv", "nosuchdir"}) {
+            std::ifstream probe(name);
+            if (probe.good()) nope_exists = true;
+        }
+        check(!nope_exists, "export: a refused or failed query leaves no file");
+
+        // A pipe inside a string literal is data, not a split.
+        const std::string quoted = run_cli(
+            "CREATE TABLE ex4 (pid INTEGER, name VARCHAR(12));\n"
+            "INSERT INTO ex4 VALUES (7, 'a|b');\n"
+            "SELECT pid, name FROM ex4 WHERE name = 'a|b';\nquit\n");
+        check(contains(quoted, "pid=7, name=a|b"),
+              "export: a quoted pipe does not split the statement");
+
+        // The round-trip: the written file parses back through the
+        // engine's own CSV reader — header skipped by the caller, every
+        // data line a valid tuple, zero skips.
+        {
+            const schema::TableSchema schema =
+                schema::load_table_schema("tablecatalog/ex1.json");
+            std::ifstream in("data/out1.csv");
+            std::string line;
+            std::getline(in, line);  // the header
+            std::size_t parsed = 0;
+            std::size_t skipped = 0;
+            while (std::getline(in, line)) {
+                try {
+                    schema::parse_csv_row(schema, line);
+                    ++parsed;
+                } catch (const common::Error&) {
+                    ++skipped;
+                }
+            }
+            check(parsed == 2 && skipped == 0,
+                  "export: the file round-trips through the engine's "
+                  "CSV reader");
+        }
     }
 
     chdir(original.c_str());

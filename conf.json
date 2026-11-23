@@ -3,5 +3,6 @@
   "pool_size": 10,
   "join_pool_size": 30,
   "hash_join": true,
-  "timing": false
+  "timing": false,
+  "labeled_rows": true
 }

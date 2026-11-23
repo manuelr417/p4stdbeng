@@ -66,24 +66,34 @@ void run() {
         "pool_size": 10,
         "join_pool_size": 8,
         "hash_join": false,
-        "timing": false
+        "timing": false,
+        "labeled_rows": false
     })", config, error, diagnostics) && config.policy == "lru" &&
               config.pool_size == 10 && config.join_pool_size == 8 &&
               config.hash_join == false && config.timing == false &&
-              error.empty(),
+              config.labeled_rows == false && error.empty(),
           "a valid file loads with every field parsed");
 
     // hash_join true round-trips too.
     check(load_text(R"({"policy": "lru", "pool_size": 2, "join_pool_size": 1,
-                     "hash_join": true, "timing": false})",
+                     "hash_join": true, "timing": false,
+                     "labeled_rows": false})",
                     config, error, diagnostics) && config.hash_join,
           "hash_join true parses");
 
     // timing true round-trips too.
     check(load_text(R"({"policy": "lru", "pool_size": 2, "join_pool_size": 1,
-                     "hash_join": true, "timing": true})",
+                     "hash_join": true, "timing": true,
+                     "labeled_rows": false})",
                     config, error, diagnostics) && config.timing,
           "timing true parses");
+
+    // labeled_rows true round-trips too.
+    check(load_text(R"({"policy": "lru", "pool_size": 2, "join_pool_size": 1,
+                     "hash_join": true, "timing": false,
+                     "labeled_rows": true})",
+                    config, error, diagnostics) && config.labeled_rows,
+          "labeled_rows true parses");
 
     // A missing file is refused by name.
     remove_config();
@@ -91,7 +101,7 @@ void run() {
               error.find("cannot open config file") != std::string::npos,
           "a missing file is refused with a named error");
 
-    // Each of the four keys is required.
+    // Each of the six keys is required.
     struct MissingCase {
         const char* json;
         const char* key;
@@ -108,6 +118,9 @@ void run() {
         {R"({"policy": "lru", "pool_size": 1, "join_pool_size": 1,
             "hash_join": true})",
          "timing"},
+        {R"({"policy": "lru", "pool_size": 1, "join_pool_size": 1,
+            "hash_join": true, "timing": false})",
+         "labeled_rows"},
     };
     for (const MissingCase& c : missing) {
         check(!load_text(c.json, config, error, diagnostics) &&
@@ -169,12 +182,14 @@ void run() {
                   std::string::npos,
           "a fractional join pool size is refused by name");
     check(!load_text(R"({"policy": "lru", "pool_size": 0, "join_pool_size": 1,
-                     "hash_join": true, "timing": false})",
+                     "hash_join": true, "timing": false,
+                     "labeled_rows": false})",
                     config, error, diagnostics) &&
               error.find("'pool_size' must be >= 1") != std::string::npos,
           "pool_size 0 is refused");
     check(!load_text(R"({"policy": "lru", "pool_size": 1, "join_pool_size": 0,
-                     "hash_join": true, "timing": false})",
+                     "hash_join": true, "timing": false,
+                     "labeled_rows": false})",
                     config, error, diagnostics) &&
               error.find("'join_pool_size' must be >= 1") != std::string::npos,
           "join_pool_size 0 is refused");
@@ -208,10 +223,24 @@ void run() {
                     config, error, diagnostics) &&
               error.find("'timing' must be true or false") != std::string::npos,
           "a quoted timing value is refused by name");
+    check(!load_text(R"({"policy": "lru", "pool_size": 1, "join_pool_size": 1,
+                     "hash_join": true, "timing": false, "labeled_rows": 1})",
+                    config, error, diagnostics) &&
+              error.find("'labeled_rows' must be true or false") !=
+                  std::string::npos,
+          "a numeric labeled_rows value is refused by name");
+    check(!load_text(R"({"policy": "lru", "pool_size": 1, "join_pool_size": 1,
+                     "hash_join": true, "timing": false,
+                     "labeled_rows": "true"})",
+                    config, error, diagnostics) &&
+              error.find("'labeled_rows' must be true or false") !=
+                  std::string::npos,
+          "a quoted labeled_rows value is refused by name");
 
     // Unknown keys are skipped with a warning — strings and booleans both.
     check(load_text(R"({"policy": "lru", "pool_size": 1, "join_pool_size": 1,
                      "hash_join": true, "timing": false,
+                     "labeled_rows": false,
                      "comment": "hello", "flag": false})",
                     config, error, diagnostics) &&
               config.pool_size == 1 &&
